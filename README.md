@@ -36,8 +36,8 @@
 ## 📁 项目结构
 
 ```
-music_learning/
-├── music_learning/
+voice2lyrics/
+├── voice2lyrics/
 │   ├── MyApp.swift                 # App 入口
 │   ├── ContentView.swift           # 主界面（识曲、历史入口、设置入口）
 │   ├── Assets.xcassets
@@ -56,7 +56,7 @@ music_learning/
 
 ## 🚀 快速开始
 
-1. Clone 本仓库并用 Xcode 打开 `music_learning.xcodeproj`。
+1. Clone 本仓库并用 Xcode 打开 `voice2lyrics.xcodeproj`。
 2. 在 **设置 → 识曲服务 · ACRCloud** 中填入你自己的 **Access Key / Secret Key / API Host**（按教程注册 acrcloud.cn → 添加「听歌识曲」项目 → 集成页复制）。
 3. 选择目标设备，Build & Run。首次识曲会请求麦克风权限。
 

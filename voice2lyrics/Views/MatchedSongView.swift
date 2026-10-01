@@ -373,7 +373,8 @@ struct MatchedSongView: View {
         do {
             let result = try await LyricsService.shared.lyrics(
                 title: match.title,
-                artist: match.artist
+                artist: match.artist,
+                album: match.album
             )
             resolvedArtworkURL = result.artworkURL
             lyricState = .loaded(result.lines)

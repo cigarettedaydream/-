@@ -63,15 +63,15 @@ actor LyricsService {
 
     // MARK: - 入口
 
-    func lyrics(title: String, artist: String) async throws -> LyricsResult {
+    func lyrics(title: String, artist: String, album: String? = nil) async throws -> LyricsResult {
         let chosen = LyricsSource.current
         do {
-            let result = try await fetch(from: chosen, title: title, artist: artist)
+            let result = try await fetch(from: chosen, title: title, artist: artist, album: album)
             return await buildResult(result)
         } catch {
             // 主来源失败 → 尝试另一个来源
             let fallback: LyricsSource = (chosen == .lrclib) ? .netease : .lrclib
-            if let result = try? await fetch(from: fallback, title: title, artist: artist),
+            if let result = try? await fetch(from: fallback, title: title, artist: artist, album: album),
                !result.texts.isEmpty {
                 return await buildResult(result)
             }
@@ -87,11 +87,11 @@ actor LyricsService {
         var artworkURL: URL? = nil
     }
 
-    private func fetch(from source: LyricsSource, title: String, artist: String)
+    private func fetch(from source: LyricsSource, title: String, artist: String, album: String?)
         async throws -> FetchedLyrics {
         switch source {
-        case .lrclib: return try await fetchFromLrclib(title: title, artist: artist)
-        case .netease: return try await fetchFromNetease(title: title, artist: artist)
+        case .lrclib: return try await fetchFromLrclib(title: title, artist: artist, album: album)
+        case .netease: return try await fetchFromNetease(title: title, artist: artist, album: album)
         }
     }
 
@@ -121,8 +121,8 @@ actor LyricsService {
         let plainLyrics: String?
     }
 
-    private func fetchFromLrclib(title: String, artist: String) async throws -> FetchedLyrics {
-        let entries = try await lrclibSearch(title: title, artist: artist)
+    private func fetchFromLrclib(title: String, artist: String, album: String?) async throws -> FetchedLyrics {
+        let entries = try await lrclibSearch(title: title, artist: artist, album: album)
         let withSynced = entries.filter { !($0.syncedLyrics ?? "").isEmpty }
         let withPlain = entries.filter { !($0.plainLyrics ?? "").isEmpty }
         guard let chosen = withSynced.first ?? withPlain.first else {
@@ -152,11 +152,15 @@ actor LyricsService {
                              translations: Array(repeating: "", count: timed.count))
     }
 
-    private func lrclibSearch(title: String, artist: String) async throws -> [SearchEntry] {
-        if let exact = try? await lrclibRequest(queryItems: [
+    private func lrclibSearch(title: String, artist: String, album: String?) async throws -> [SearchEntry] {
+        var exactItems: [URLQueryItem] = [
             URLQueryItem(name: "track_name", value: title),
             URLQueryItem(name: "artist_name", value: artist),
-        ]), !exact.isEmpty {
+        ]
+        if let album, !album.isEmpty {
+            exactItems.append(URLQueryItem(name: "album_name", value: album))
+        }
+        if let exact = try? await lrclibRequest(queryItems: exactItems), !exact.isEmpty {
             return exact
         }
         return try await lrclibRequest(queryItems: [
@@ -189,9 +193,11 @@ actor LyricsService {
     private struct NESearchResponse: Decodable {
         struct Song: Decodable {
             struct Artist: Decodable { let name: String? }
+            struct Album: Decodable { let name: String? }
             let id: Int
             let name: String?
             let artists: [Artist]?
+            let album: Album?
         }
         struct Result: Decodable { let songs: [Song]? }
         let result: Result?
@@ -204,20 +210,22 @@ actor LyricsService {
         let code: Int?
     }
 
-    private func fetchFromNetease(title: String, artist: String) async throws -> FetchedLyrics {
-        let ids = try await neteaseCandidates(title: title, artist: artist)
-        guard !ids.isEmpty else { throw LyricsError.notFound }
+    private func fetchFromNetease(title: String, artist: String, album: String?) async throws -> FetchedLyrics {
+        let candidates = try await neteaseCandidates(title: title, artist: artist, album: album)
+        guard !candidates.isEmpty else { throw LyricsError.notFound }
 
-        // 逐个候选取歌词，取第一个真正有带时间戳歌词的结果
-        for id in ids {
-            guard let raw = try? await neteaseLyric(id: id) else { continue }
+        // 优先尝试「歌手匹配」的候选（显著减少命中翻唱/同名曲）；都不行再尝试其余
+        let ordered = candidates.filter { $0.artistMatch } + candidates.filter { !$0.artistMatch }
+
+        for candidate in ordered {
+            guard let raw = try? await neteaseLyric(id: candidate.id) else { continue }
             let original = Self.parseLRC(raw.original).filter { !Self.isCreditLine($0.1) }
             if original.count >= 3 {
                 let translationByTime = Self.parseLRC(raw.translated)
                 let translations = original.map { line in
                     Self.matchTranslation(lineTime: line.0, in: translationByTime)
                 }
-                let cover = await neteaseCoverURL(songId: id)
+                let cover = await neteaseCoverURL(songId: candidate.id)
                 return FetchedLyrics(times: original.map { $0.0 },
                                      texts: original.map { $0.1 },
                                      translations: translations,
@@ -265,27 +273,41 @@ actor LyricsService {
         return ""
     }
 
-    /// 搜索并按「歌手/歌名匹配度」排序候选 id。
-    private func neteaseCandidates(title: String, artist: String) async throws -> [Int] {
-        let songs = try await neteaseSearch(query: "\(artist) \(title)")
+    /// 网易云候选：id + 是否歌手匹配 + 综合匹配分。
+    private struct NECandidate { let id: Int; let artistMatch: Bool; let score: Int }
+
+    /// 搜索并按「歌手 + 歌名 + 专辑名」综合匹配度排序候选；歌手匹配权重最高，专辑作为辅助。
+    private func neteaseCandidates(title: String, artist: String, album: String?) async throws -> [NECandidate] {
         let targetArtist = Self.normalize(artist)
         let targetTitle = Self.normalize(title)
+        let targetAlbum = album.map { Self.normalize($0) } ?? ""
 
-        let scored = songs.map { song -> (id: Int, score: Int) in
+        // 合并「歌手+歌名」与「仅歌名」两次搜索结果，扩大命中正版的概率
+        var byId: [Int: NESearchResponse.Song] = [:]
+        for song in (try? await neteaseSearch(query: "\(artist) \(title)")) ?? [] { byId[song.id] = song }
+        for song in (try? await neteaseSearch(query: title)) ?? [] where byId[song.id] == nil { byId[song.id] = song }
+
+        return byId.values.map { song -> NECandidate in
             let names = (song.artists ?? []).compactMap { Self.normalize($0.name ?? "") }
-            var score = 0
-            if names.contains(where: { $0 == targetArtist }) { score += 3 }
-            else if names.contains(where: { $0.contains(targetArtist) || targetArtist.contains($0) }) { score += 2 }
-            let normTitle = Self.normalize(song.name ?? "")
-            if normTitle == targetTitle { score += 2 }
-            else if normTitle.contains(targetTitle) || targetTitle.contains(normTitle) { score += 1 }
-            return (song.id, score)
-        }
-        let sorted = scored.sorted { $0.score > $1.score }.map { $0.id }
-        if !sorted.isEmpty { return sorted }
+            let artistExact = !targetArtist.isEmpty && names.contains { $0 == targetArtist }
+            let artistPartial = !targetArtist.isEmpty && names.contains { !$0.isEmpty && (targetArtist.contains($0) || $0.contains(targetArtist)) }
+            let artistMatch = artistExact || artistPartial
 
-        // 兜底：只用歌名再搜一次
-        return try await neteaseSearch(query: title).map { $0.id }
+            let normTitle = Self.normalize(song.name ?? "")
+            let titleExact = !targetTitle.isEmpty && normTitle == targetTitle
+            let titlePartial = !targetTitle.isEmpty && (normTitle.contains(targetTitle) || targetTitle.contains(normTitle))
+
+            let normAlbum = Self.normalize(song.album?.name ?? "")
+            let albumMatch = !targetAlbum.isEmpty && !normAlbum.isEmpty
+                && (normAlbum == targetAlbum || normAlbum.contains(targetAlbum) || targetAlbum.contains(normAlbum))
+
+            var score = 0
+            if artistExact { score += 6 } else if artistPartial { score += 3 }
+            if titleExact { score += 4 } else if titlePartial { score += 2 }
+            if albumMatch { score += 3 }
+            return NECandidate(id: song.id, artistMatch: artistMatch, score: score)
+        }
+        .sorted { $0.score > $1.score }
     }
 
     private func neteaseSearch(query: String) async throws -> [NESearchResponse.Song] {

@@ -9,6 +9,7 @@ struct ContentView: View {
     @State private var showHistory = false
     @State private var showChoices = false
     @State private var candidates: [MatchInfo] = []
+    @State private var showManualSearch = false
 
     var body: some View {
         NavigationStack {
@@ -30,6 +31,8 @@ struct ContentView: View {
                     .frame(minHeight: 72)
 
                 actionButton
+
+                manualSearchButton
 
                 Spacer()
 
@@ -61,6 +64,22 @@ struct ContentView: View {
             }
             .sheet(isPresented: $showSettings) {
                 SettingsView()
+            }
+            .sheet(isPresented: $showManualSearch) {
+                ManualSearchView { title, artist, album in
+                    let info = MatchInfo(
+                        id: "manual-\(UUID().uuidString)",
+                        title: title,
+                        artist: artist.isEmpty ? "未知歌手" : artist,
+                        album: album.isEmpty ? nil : album,
+                        artworkURL: nil,
+                        appleMusicURL: nil,
+                        songOffset: 0,
+                        matchedAt: Date()
+                    )
+                    history.record(info)
+                    lastMatch = info
+                }
             }
         }
         .onChange(of: matcher.phase) { _, newPhase in
@@ -244,8 +263,67 @@ struct ContentView: View {
             .controlSize(.large)
         }
     }
+
+    // MARK: - 手动搜索歌词入口
+
+    @ViewBuilder
+    private var manualSearchButton: some View {
+        Button {
+            showManualSearch = true
+        } label: {
+            Label("手动搜索歌词", systemImage: "magnifyingglass")
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.large)
+    }
 }
 
 #Preview {
     ContentView()
+}
+
+/// 手动输入歌曲信息、跳过识曲直接搜索歌词的表单
+struct ManualSearchView: View {
+    var onSubmit: (_ title: String, _ artist: String, _ album: String) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var title = ""
+    @State private var artist = ""
+    @State private var album = ""
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField("歌曲名（必填）", text: $title)
+                        .textInputAutocapitalization(.never)
+                    TextField("歌手（选填）", text: $artist)
+                        .textInputAutocapitalization(.never)
+                    TextField("专辑（选填，可帮助匹配）", text: $album)
+                        .textInputAutocapitalization(.never)
+                } footer: {
+                    Text("跳过识曲，直接按你输入的信息搜索歌词并进入歌词页。歌手 / 专辑填得越全，匹配越准。")
+                }
+            }
+            .navigationTitle("手动搜索歌词")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("取消") { dismiss() }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("搜索") {
+                        let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !t.isEmpty else { return }
+                        onSubmit(t,
+                                 artist.trimmingCharacters(in: .whitespacesAndNewlines),
+                                 album.trimmingCharacters(in: .whitespacesAndNewlines))
+                        dismiss()
+                    }
+                    .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        }
+    }
 }
