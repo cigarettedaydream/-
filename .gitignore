@@ -1,0 +1,21 @@
+# macOS
+.DS_Store
+
+# Xcode 用户/派生数据
+DerivedData/
+build/
+*.xcuserstate
+xcuserdata/
+*.moved-aside
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# SPM
+.build/
+.swiftpm/
+
+# 密钥/本地配置（防止误提交）
+*.env
+Secrets.xcconfig
