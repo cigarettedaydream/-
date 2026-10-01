@@ -173,7 +173,7 @@ actor LyricsService {
         components?.queryItems = queryItems
         guard let url = components?.url else { throw LyricsError.network }
         var request = URLRequest(url: url)
-        request.setValue("music-learning/1.0", forHTTPHeaderField: "User-Agent")
+        request.setValue("voice2lyrics/1.0", forHTTPHeaderField: "User-Agent")
         request.timeoutInterval = 15
 
         do {

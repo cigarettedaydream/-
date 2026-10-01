@@ -256,7 +256,7 @@ final class SongMatcher {
         let accessKey = ACRConfiguration.accessKey
         let secretKey = ACRConfiguration.secretKey
         let timestamp = String(Date().timeIntervalSince1970)
-        let boundary = "----MusicLearning\(UUID().uuidString)"
+        let boundary = "----Voice2Lyrics\(UUID().uuidString)"
 
         // 中国区签名不含 host：POST\n/v1/identify\n{access_key}\n{data_type}\n{signature_version}\n{timestamp}
         let stringToSign = "POST\n/v1/identify\n\(accessKey)\naudio\n1\n\(timestamp)"
