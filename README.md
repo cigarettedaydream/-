@@ -1,3 +1,5 @@
+> **Tips：** 本项目除了 logo，均为 AI 生成，作为 Xcode 连接 Codex 的一个练习。作者本人也非软件相关专业，还在学习中，程序不保证持续更新。有问题的话。。。。。。就有问题吧！
+
 <p align="center">
   <img src="assets/logo.png" width="120" alt="出音谓来 logo">
 </p>
